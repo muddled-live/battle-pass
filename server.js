@@ -40,6 +40,10 @@ const Stream = sequelize.define('stream', {
         type: DataTypes.INTEGER,
         allowNull: false,
     },
+    isLive: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: true,
+    },
 });
 
 const CheckIn = sequelize.define('checkin', {
@@ -72,10 +76,80 @@ User.hasMany(CheckIn, {
 });
 CheckIn.belongsTo(User);
 
+sequelize.sync()
+
+// Stream.create({ userId: 1 })
 
 
-const crimps = User.create({ username: "Nate" })
-    .then((data) => {
-        const crimps_stream = CheckIn.create({ userId: data.id, streamId: 1 });
-    })
+client.on('message', async (channel, userstate, message, self) => {
+    if (self) return;
+
+    if (message.includes('test')) {
+        const user = await User.findOne({
+            where: {
+                username: userstate.username,
+            },
+        });
+        const streamer = await User.findOne({
+            where: {
+                username: channel.substring(1),
+            },
+        });
+        checkAttendance(user, streamer)
+    }
+});
+
+async function checkAttendance(user, channel) {
+    const currentStream = await Stream.findOne({
+        where: {
+            userId: channel.id,
+            isLive: true,
+        },
+    });
+
+    if (!currentStream) {
+        return;
+    }
+
+    try {
+        const existingAttendance = await CheckIn.findOne({
+            where: {
+                streamId: currentStream.id,
+                userId: user.id,
+            },
+        });
+
+        if (!existingAttendance) {
+            const lastStream = await Stream.findOne({
+                where: {
+                    userId: channel.id,
+                    isLive: false,
+                },
+                order: [['id', 'DESC']],
+            });
+            const existingStreak = await CheckIn.findOne({
+                where: {
+                    streamId: lastStream.id,
+                    userId: user.id,
+                },
+            });
+            let streak = 0;
+            if (existingStreak) {
+                streak = existingStreak.streak + 1;
+            }
+            await CheckIn.create({
+                streamId: currentStream.id,
+                userId: user.id,
+                streak: streak
+            });
+
+            client.say(channel.username, `you've been marked present for today's stream!`);
+        } else {
+            client.say(channel.username, `you've already been marked present for today.`);
+        }
+
+    } catch (error) {
+        console.error('Error checking/adding attendance:', error);
+    }
+}
 
