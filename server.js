@@ -1,7 +1,14 @@
-require('dotenv').config();
-
 const tmi = require('tmi.js');
-const { Sequelize, DataTypes } = require('sequelize');
+const WebSocket = require('ws');
+const { Sequelize } = require('sequelize');
+
+const { User, Stream, CheckIn } = require('./db.js');
+const { config } = require('./config');
+const { checkAttendance } = require('./utils');
+const { subscribeToEvents } = require('./events.js');
+
+const socket = new WebSocket('ws://127.0.0.1:8080/ws?keepalive_timeout_seconds=100');
+const ACCESS_TOKEN = "4aouctmbkmkk8d3h8zqizilju0uyd0"
 
 const client = new tmi.Client({
     options: { debug: true },
@@ -9,83 +16,34 @@ const client = new tmi.Client({
         secure: true,
         reconnect: true
     },
-    identity: {
-        username: process.env.BOT_NICKNAME,
-        password: process.env.TMI_TOKEN,
-    },
-    channels: ['crimpsonsloper'],
+    identity: config.identity,
+    channels: [],
 });
 
-client.connect()
+client.on('connected', async () => {
+    const channels = await User.findAll({
+        where: {
+            role: { [Sequelize.Op.gt]: 0 },
+        },
+        attributes: ['username'],
+    });
 
-const sequelize = new Sequelize(
-    process.env.AWS_DB_NAME,
-    process.env.AWS_DB_USERNAME,
-    process.env.AWS_DB_PASSWORD,
-    {
-        host: process.env.AWS_DB_HOST,
-        dialect: 'mysql'
+    for (const username of channels) {
+        if (!client.channels.includes(username.username)) {
+            try {
+                await client.join(username.username);
+            } catch (error) {
+                console.error(`Error joining channel ${username.username}:`, error);
+            }
+        }
     }
-);
-
-const User = sequelize.define('user', {
-    username: {
-        type: DataTypes.STRING,
-        allowNull: false,
-    },
-});
-
-const Stream = sequelize.define('stream', {
-    userId: {
-        type: DataTypes.INTEGER,
-        allowNull: false,
-    },
-    isLive: {
-        type: DataTypes.BOOLEAN,
-        defaultValue: true,
-    },
-});
-
-const CheckIn = sequelize.define('checkin', {
-    userId: {
-        type: DataTypes.INTEGER,
-        allowNull: false,
-    },
-    streamId: {
-        type: DataTypes.INTEGER,
-        allowNull: false,
-    },
-    streak: {
-        type: DataTypes.INTEGER,
-        defaultValue: 0,
-    },
-});
-
-User.hasMany(Stream, {
-    foreignKey: 'userId'
-});
-Stream.belongsTo(User);
-
-Stream.hasMany(CheckIn, {
-    foreignKey: 'streamId'
-});
-CheckIn.belongsTo(Stream);
-
-User.hasMany(CheckIn, {
-    foreignKey: 'userId'
-});
-CheckIn.belongsTo(User);
-
-sequelize.sync()
-
-// Stream.create({ userId: 1 })
-
+})
 
 client.on('message', async (channel, userstate, message, self) => {
     if (self) return;
 
-    if (message.includes('test')) {
-        const user = await User.findOne({
+    if (message.includes('!board')) {
+        const [user] = await User.findOrCreate({
             where: {
                 username: userstate.username,
             },
@@ -99,57 +57,74 @@ client.on('message', async (channel, userstate, message, self) => {
     }
 });
 
-async function checkAttendance(user, channel) {
-    const currentStream = await Stream.findOne({
-        where: {
-            userId: channel.id,
-            isLive: true,
-        },
-    });
+client.connect().catch((err) => {
+    console.log(err)
+})
 
-    if (!currentStream) {
-        return;
-    }
+socket.on('open', async function () {
+    socket.on('message', async function (data) {
+        const message = JSON.parse(data);
 
-    try {
-        const existingAttendance = await CheckIn.findOne({
-            where: {
-                streamId: currentStream.id,
-                userId: user.id,
-            },
-        });
+        if (message.metadata && message.metadata.message_type) {
+            const messageType = message.metadata.message_type;
 
-        if (!existingAttendance) {
-            const lastStream = await Stream.findOne({
-                where: {
-                    userId: channel.id,
-                    isLive: false,
-                },
-                order: [['id', 'DESC']],
-            });
-            const existingStreak = await CheckIn.findOne({
-                where: {
-                    streamId: lastStream.id,
-                    userId: user.id,
-                },
-            });
-            let streak = 0;
-            if (existingStreak) {
-                streak = existingStreak.streak + 1;
+            switch (messageType) {
+                case 'session_welcome':
+                    const sessionId = message.payload.session.id;
+                    console.log(sessionId)
+                    subscribeToEvents(["stream.online", "stream.offline"], sessionId, ACCESS_TOKEN);
+                    break;
+
+                case 'notification':
+                    const notificationType = message.payload.subscription.type;
+                    const username = message.payload.event.broadcaster_user_login;
+
+                    const user = await User.findOne({ where: { username: username } })
+                    switch (notificationType) {
+                        case 'stream.offline':
+                            const stream = await Stream.findOne({ where: { userId: user.id, isLive: true } });
+                            stream.isLive = false;
+                            await stream.save();
+                            break;
+
+                        case 'stream.online':
+                            await Stream.create({ userId: user.id })
+                            break;
+
+                        default:
+                            console.log('Received a message with unknown type:', notificationType);
+                    }
+
+                    break;
+
+                case 'session_keepalive':
+                    console.log('Received keep-alive message');
+                    break;
+
+                case 'reconnect':
+                    console.log('Received reconnect message:', message);
+                    break;
+
+                case 'revocation':
+                    console.log('Received revocation message:', message);
+                    break;
+
+                case 'close':
+                    console.log('Received close message:', message);
+                    break;
+
+                default:
+                    console.log('Received a message with unknown type:', messageType);
             }
-            await CheckIn.create({
-                streamId: currentStream.id,
-                userId: user.id,
-                streak: streak
-            });
-
-            client.say(channel.username, `you've been marked present for today's stream!`);
-        } else {
-            client.say(channel.username, `you've already been marked present for today.`);
         }
+    });
+});
 
-    } catch (error) {
-        console.error('Error checking/adding attendance:', error);
-    }
-}
+socket.on('error', function (error) {
+    console.error('WebSocket error:', error);
+});
+
+socket.on('close', function () {
+    console.log('WebSocket connection closed');
+});
 
