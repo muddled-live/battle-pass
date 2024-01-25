@@ -55,6 +55,17 @@ const CheckIn = sequelize.define('checkin', {
     },
 });
 
+const Message = sequelize.define('message', {
+    userId: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+    },
+    content: {
+        type: DataTypes.STRING,
+        allowNull: false,
+    },
+});
+
 User.hasMany(Stream, {
     foreignKey: 'userId'
 });
@@ -70,10 +81,16 @@ User.hasMany(CheckIn, {
 });
 CheckIn.belongsTo(User);
 
+User.hasMany(Message, {
+    foreignKey: 'userId'
+});
+Message.belongsTo(User);
+
 sequelize.sync()
 
 module.exports = {
     User,
     CheckIn,
-    Stream
+    Stream,
+    Message
 }

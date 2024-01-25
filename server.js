@@ -7,7 +7,7 @@ const { config } = require('./config');
 const { checkAttendance } = require('./utils');
 const { subscribeToEvents } = require('./events.js');
 
-const socket = new WebSocket('ws://127.0.0.1:8080/ws?keepalive_timeout_seconds=100');
+const socket = new WebSocket('wss://eventsub.wss.twitch.tv/ws?keepalive_timeout_seconds=100');
 const ACCESS_TOKEN = "4aouctmbkmkk8d3h8zqizilju0uyd0"
 
 const client = new tmi.Client({

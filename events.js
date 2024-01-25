@@ -344,7 +344,7 @@ async function subscribeToEvents(events, websocketSessionId, access_token) {
                 'Client-Id': config.CLIENT_ID,
                 'Content-Type': 'application/json',
             };
-            const response = await axios.post('http://127.0.0.1:8080/eventsub/subscriptions', requestBody, {
+            const response = await axios.post('https://api.twitch.tv/helix/eventsub/subscriptions', requestBody, {
                 headers: headers,
             });
             console.log(`Subscription to ${event} event created`);

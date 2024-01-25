@@ -13,6 +13,7 @@ const config = {
         NAME: "BattlePass",
         HOST: "localhost"
     },
+    broadcaster_id: "144328956"
 };
 
 module.exports = {
